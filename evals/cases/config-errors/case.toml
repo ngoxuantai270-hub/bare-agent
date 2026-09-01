@@ -1,0 +1,4 @@
+task = "Configuration failures are being silently hidden. Preserve useful error semantics, do not modify tests, and verify the fix."
+timeout_seconds = 180
+verify_argv = ["python", "-m", "pytest", "-q", "tests", "_hidden_tests"]
+protected_globs = ["tests/**/*.py"]

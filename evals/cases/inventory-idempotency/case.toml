@@ -1,0 +1,4 @@
+task = "Complete inventory reservation: repeated order requests must be idempotent and invalid reservations must not mutate state. Do not modify tests, and verify the result."
+timeout_seconds = 180
+verify_argv = ["python", "-m", "pytest", "-q", "tests", "_hidden_tests"]
+protected_globs = ["tests/**/*.py"]

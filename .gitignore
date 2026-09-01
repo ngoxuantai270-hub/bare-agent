@@ -23,6 +23,7 @@ dist/
 .DS_Store
 *.log
 *.jsonl
+.eval-results/
 submission/
 
 # Assessment brief is a local reference, not part of the project submission

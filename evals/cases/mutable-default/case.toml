@@ -1,0 +1,4 @@
+task = "Different requests are sharing event state. Find the root cause, fix it without modifying tests, and verify the result."
+timeout_seconds = 180
+verify_argv = ["python", "-m", "pytest", "-q", "tests", "_hidden_tests"]
+protected_globs = ["tests/**/*.py"]

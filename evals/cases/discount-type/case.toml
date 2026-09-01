@@ -1,0 +1,4 @@
+task = "Run the tests, diagnose the failure, fix the production code without modifying tests, and verify the solution."
+timeout_seconds = 180
+verify_argv = ["python", "-m", "pytest", "-q", "tests", "_hidden_tests"]
+protected_globs = ["tests/**/*.py"]
