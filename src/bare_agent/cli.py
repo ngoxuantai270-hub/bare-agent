@@ -10,7 +10,15 @@ from bare_agent import __version__
 from bare_agent.agent import BareAgent, EventSink
 from bare_agent.model import ConfigurationError, ModelClient, OpenAICompatibleModel
 from bare_agent.tools import LocalToolSet
-from bare_agent.types import ModelText, RunFinished, RunLimits, ToolFinished, ToolStarted
+from bare_agent.trace import JsonlEventWriter
+from bare_agent.types import (
+    AgentEvent,
+    ModelText,
+    RunFinished,
+    RunLimits,
+    ToolFinished,
+    ToolStarted,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tool-calls", type=int, default=60)
     parser.add_argument("--context-chars", type=int, default=60_000)
     parser.add_argument("--command-timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--trace-jsonl",
+        type=Path,
+        help="append privacy-minimized event metadata to a local JSONL file",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -58,13 +71,25 @@ def main(
         error_stream.write(f"Configuration error: {error}\n")
         return 2
 
+    trace_writer: JsonlEventWriter | None = None
+    if args.trace_jsonl is not None:
+        try:
+            trace_writer = JsonlEventWriter(args.trace_jsonl)
+        except OSError as error:
+            error_stream.write(f"Configuration error: cannot open trace file ({error.strerror})\n")
+            return 2
+
     agent = BareAgent(active_model, tools, limits=limits)
-    renderer = _console_renderer(output_stream)
-    task = " ".join(args.task).strip()
-    if task:
-        result = agent.run(task, on_event=renderer)
-        return _result_exit_code(result.status)
-    return _run_repl(agent, input_stream, output_stream, error_stream, renderer)
+    renderer = _fanout(_console_renderer(output_stream), trace_writer)
+    try:
+        task = " ".join(args.task).strip()
+        if task:
+            result = agent.run(task, on_event=renderer)
+            return _result_exit_code(result.status)
+        return _run_repl(agent, input_stream, output_stream, error_stream, renderer)
+    finally:
+        if trace_writer is not None:
+            trace_writer.close()
 
 
 def _run_repl(
@@ -98,7 +123,15 @@ def _run_repl(
                 stdout.write("Session reset.\n")
                 continue
             if task == "/help":
-                stdout.write("/help  show commands\n/reset clear in-memory history\n/exit  quit\n")
+                stdout.write(
+                    "/help   show commands\n"
+                    "/status show in-memory session status\n"
+                    "/reset  clear in-memory history\n"
+                    "/exit   quit\n"
+                )
+                continue
+            if task == "/status":
+                stdout.write(f"turns={session.turn_count}\n")
                 continue
             stderr.write(f"Unknown command: {task}\n")
             continue
@@ -120,6 +153,16 @@ def _console_renderer(stdout: TextIO) -> EventSink:
         stdout.flush()
 
     return render
+
+
+def _fanout(*sinks: EventSink | None) -> EventSink:
+    active_sinks = tuple(sink for sink in sinks if sink is not None)
+
+    def emit(event: AgentEvent) -> None:
+        for sink in active_sinks:
+            sink(event)
+
+    return emit
 
 
 def _result_exit_code(status: str) -> int:

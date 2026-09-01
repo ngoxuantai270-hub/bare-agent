@@ -23,9 +23,19 @@ uv run bare-agent --workspace ./project "fix the failing tests"
 uv run bare-agent --workspace ./project
 ```
 
-The REPL supports `/help`, `/reset`, and `/exit`. It preserves prior user turns,
+The REPL supports `/help`, `/status`, `/reset`, and `/exit`. It preserves prior user turns,
 assistant tool calls, matching tool results, and final answers only for the life
 of the current process. One-shot and REPL modes share the same agent loop.
+
+V1.1 adds an opt-in privacy-minimized event trace:
+
+```bash
+uv run bare-agent --workspace ./project --trace-jsonl ./run.jsonl "fix tests"
+```
+
+The JSONL trace records timestamps, event kinds, tool names, status, and counts.
+It deliberately omits user tasks, model text, tool arguments, file contents, and
+command output. Treat the trace as a local runtime artifact and do not commit it.
 
 ## Design
 
