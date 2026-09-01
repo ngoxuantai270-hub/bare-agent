@@ -40,6 +40,40 @@ user request. If anything is incomplete or incorrect, fix it and verify again.""
 
 EventSink = Callable[[AgentEvent], None]
 
+_UV_RUN_OPTIONS_WITH_VALUE = {
+    "--cache-dir",
+    "--directory",
+    "--env-file",
+    "--extra",
+    "--group",
+    "--no-extra",
+    "--no-group",
+    "--only-group",
+    "--package",
+    "--project",
+    "--python",
+    "--with",
+    "--with-editable",
+    "--with-requirements",
+}
+_UV_RUN_FLAGS = {
+    "--active",
+    "--all-extras",
+    "--all-groups",
+    "--all-packages",
+    "--exact",
+    "--frozen",
+    "--isolated",
+    "--locked",
+    "--no-default-groups",
+    "--no-dev",
+    "--no-editable",
+    "--no-env-file",
+    "--no-project",
+    "--no-sync",
+    "--only-dev",
+}
+
 
 class ToolSet(Protocol):
     @property
@@ -244,7 +278,7 @@ def _is_verification_command(value: object) -> bool:
     argv = list(value)
     executable = posixpath.basename(argv[0]).lower()
     if executable == "uv" and len(argv) > 2 and argv[1] == "run":
-        return _is_verification_command(argv[2:])
+        return _is_verification_command(_unwrap_uv_run(argv))
     if executable == "pytest":
         return True
     if (executable == "python" or executable.startswith("python3")) and len(argv) > 2:
@@ -252,3 +286,24 @@ def _is_verification_command(value: object) -> bool:
     if executable in {"npm", "pnpm", "yarn"} and len(argv) > 1:
         return argv[1] == "test" or (len(argv) > 2 and argv[1:3] == ["run", "test"])
     return executable in {"cargo", "go"} and len(argv) > 1 and argv[1] == "test"
+
+
+def _unwrap_uv_run(argv: list[str]) -> list[str]:
+    index = 2
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            return argv[index + 1 :]
+        if token in {"-m", "--module"}:
+            return ["python", "-m", *argv[index + 1 :]]
+        option = token.split("=", 1)[0]
+        if option in _UV_RUN_OPTIONS_WITH_VALUE:
+            index += 1 if "=" in token else 2
+            continue
+        if token in _UV_RUN_FLAGS:
+            index += 1
+            continue
+        if token.startswith("-"):
+            return []
+        return argv[index:]
+    return []

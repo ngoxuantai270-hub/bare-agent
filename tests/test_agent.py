@@ -143,14 +143,23 @@ def test_reading_a_different_file_does_not_verify_a_write(tmp_path: Path) -> Non
     assert result.reason == "verification_required"
 
 
-def test_successful_inspection_command_does_not_verify_a_write(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["ls"],
+        ["uv", "run", "--with", "pytest", "python", "script.py"],
+    ],
+)
+def test_successful_non_test_command_does_not_verify_a_write(
+    tmp_path: Path, argv: list[str]
+) -> None:
     agent, _ = agent_for(
         tmp_path,
         [
             ModelReply(
                 tool_calls=(
                     call("write", "write_file", {"path": "target.txt", "content": "target"}),
-                    call("inspect", "run_command", {"argv": ["ls"]}),
+                    call("inspect", "run_command", {"argv": argv}),
                 )
             ),
             ModelReply("done without a real verification"),
@@ -172,6 +181,7 @@ def test_successful_inspection_command_does_not_verify_a_write(tmp_path: Path) -
         ["python", "-m", "pytest", "-q"],
         ["python3", "-m", "unittest"],
         ["uv", "run", "pytest", "-q"],
+        ["uv", "run", "--extra", "dev", "pytest", "-q"],
         ["uv", "run", "python", "-m", "pytest"],
         ["npm", "test"],
         ["npm", "run", "test"],
