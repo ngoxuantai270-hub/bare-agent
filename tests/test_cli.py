@@ -67,6 +67,7 @@ def test_repl_keyboard_interrupt_cancels_run_and_accepts_next_task(tmp_path: Pat
 
 
 def test_cli_reports_missing_configuration_without_traceback(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
     stderr = io.StringIO()

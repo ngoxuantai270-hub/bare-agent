@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -67,9 +68,60 @@ def test_openai_adapter_hides_sdk_error_details(error_name: str, retryable: bool
     assert "secret-token-in-error" not in str(raised.value)
 
 
-def test_model_configuration_requires_environment(monkeypatch) -> None:
+def test_model_configuration_requires_environment(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
 
     with pytest.raises(ConfigurationError, match="OPENAI_API_KEY"):
         OpenAICompatibleModel.from_env()
+
+
+def test_model_configuration_loads_project_env_without_overriding_process_env(
+    tmp_path, monkeypatch
+) -> None:
+    env_names = ("OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL")
+    original = {name: os.environ.get(name) for name in env_names}
+    for name in env_names:
+        os.environ.pop(name, None)
+    (tmp_path / ".env").write_text(
+        "OPENAI_API_KEY='file-credential'\n"
+        "OPENAI_MODEL='deepseek-v4-flash'\n"
+        "OPENAI_BASE_URL='https://api.deepseek.com'\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_openai(*, api_key: str, base_url: str):
+        captured.update(api_key=api_key, base_url=base_url)
+        message = SimpleNamespace(content="configured", tool_calls=[])
+        completions = FakeCompletions(SimpleNamespace(choices=[SimpleNamespace(message=message)]))
+        captured["completions"] = completions
+        return fake_client(completions)
+
+    monkeypatch.setattr("openai.OpenAI", fake_openai)
+    try:
+        model = OpenAICompatibleModel.from_env()
+        assert captured["api_key"] == "file-credential"
+        assert captured["base_url"] == "https://api.deepseek.com"
+        model.complete(ModelRequest(messages=(), tools=()))
+        completions = captured["completions"]
+        assert isinstance(completions, FakeCompletions)
+        assert completions.kwargs["model"] == "deepseek-v4-flash"
+
+        os.environ["OPENAI_API_KEY"] = "process-credential"
+        os.environ["OPENAI_MODEL"] = "process-model"
+        os.environ["OPENAI_BASE_URL"] = "https://process.example/v1"
+        model = OpenAICompatibleModel.from_env()
+        assert captured["api_key"] == "process-credential"
+        assert captured["base_url"] == "https://process.example/v1"
+        model.complete(ModelRequest(messages=(), tools=()))
+        completions = captured["completions"]
+        assert isinstance(completions, FakeCompletions)
+        assert completions.kwargs["model"] == "process-model"
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value

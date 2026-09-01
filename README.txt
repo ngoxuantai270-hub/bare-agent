@@ -1,6 +1,6 @@
 BareAgent 是一个从零实现的命令行编程智能体，不依赖 Agent 框架，也不使用服务端文件或代码执行工具。模型只负责决策；本地 Harness 自行维护对话、调用工具并控制循环。
 
-环境：Python 3.11+、uv。安装：uv sync --extra dev。仅通过环境变量设置 OPENAI_API_KEY、OPENAI_MODEL；兼容服务可另设 OPENAI_BASE_URL。不得把真实凭据写入仓库、说明或视频。
+环境：Python 3.11+、uv。安装：uv sync --extra dev。运行 ./scripts/configure-env.sh 后静默输入 API Key；MODEL 默认 deepseek-v4-flash，BASE_URL 默认 https://api.deepseek.com。配置保存到已忽略且权限为 600 的本地 .env，程序会自动读取。也可使用同名环境变量覆盖。不得把真实凭据写入仓库、说明或视频。
 
 单任务：uv run bare-agent --workspace ./project "修复失败测试"
 内存 REPL：uv run bare-agent --workspace ./project

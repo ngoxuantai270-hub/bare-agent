@@ -11,10 +11,9 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --extra dev
-export OPENAI_API_KEY="..."
-export OPENAI_MODEL="your-model-name"
-# Optional for compatible providers:
-export OPENAI_BASE_URL="https://api.openai.com/v1"
+
+# Interactive local configuration (API key input is hidden)
+./scripts/configure-env.sh
 
 # One task, one temporary session
 uv run bare-agent --workspace ./project "fix the failing tests"
@@ -22,6 +21,12 @@ uv run bare-agent --workspace ./project "fix the failing tests"
 # In-memory REPL session
 uv run bare-agent --workspace ./project
 ```
+
+The configuration script defaults to `deepseek-v4-flash` and
+`https://api.deepseek.com`. It writes a project-local `.env` with file mode
+`600`; BareAgent loads that file automatically. Existing process environment
+variables take precedence. The script does not modify a shell profile or print
+the API key.
 
 The REPL supports `/help`, `/status`, `/reset`, and `/exit`. It preserves prior user turns,
 assistant tool calls, matching tool results, and final answers only for the life
@@ -56,12 +61,12 @@ exhaustion, model failure, or interruption.
 
 ## Security boundary
 
-Credentials are read only from environment variables. `.env` files are ignored,
-and child commands receive an environment with key/token/secret/password-like
-variables removed. Paths are resolved under the workspace, writes are atomic,
-commands use an argv list with `shell=False`, and process groups are killed on
-timeout. Obvious destructive, elevation, shutdown, and remote-push commands are
-blocked.
+Credentials are read from process environment variables or the ignored local
+`.env` file. Child commands receive an environment with
+key/token/secret/password-like variables removed. Paths are resolved under the
+workspace, writes are atomic, commands use an argv list with `shell=False`, and
+process groups are killed on timeout. Obvious destructive, elevation, shutdown,
+and remote-push commands are blocked.
 
 These guardrails are not an OS sandbox. Run untrusted repositories inside a
 container or VM.

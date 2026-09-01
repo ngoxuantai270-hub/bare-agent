@@ -3,7 +3,10 @@ from __future__ import annotations
 import os
 from collections import deque
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any, Protocol
+
+from dotenv import load_dotenv
 
 from bare_agent.types import ModelReply, ModelRequest, ToolCall
 
@@ -48,6 +51,7 @@ class OpenAICompatibleModel:
 
     @classmethod
     def from_env(cls) -> OpenAICompatibleModel:
+        load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
         api_key = os.environ.get("OPENAI_API_KEY")
         model = os.environ.get("OPENAI_MODEL")
         base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
