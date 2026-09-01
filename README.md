@@ -59,7 +59,9 @@ Every model tool call receives exactly one result, including invalid arguments
 and tool failures. Context trimming removes whole session turns first, then
 whole completed rounds, so tool-call/result pairs never become orphaned. Runs
 stop on a final model answer, configured limits, repeated tool batches, context
-exhaustion, model failure, or interruption.
+exhaustion, model failure, or interruption. The context budget is a
+provider-independent character approximation. BareAgent does not use an LLM to
+summarize or semantically compact discarded history.
 
 Successful `write_file` and `edit_file` calls create a pending-verification
 obligation. BareAgent will reject a premature final answer until the changed
@@ -67,6 +69,31 @@ file is read back, or a relevant command exits successfully. Repeated refusal
 to verify stops the run with `verification_required` instead of claiming
 success. The terminal prints safe write/edit character or path summaries so a
 surprising mutation is visible without exposing file contents.
+
+Only successful test-like commands such as `pytest`, `python -m pytest`,
+`npm test`, `cargo test`, or `go test` satisfy executable verification. A
+successful inspection command such as `ls` or `git status` does not. Nonzero
+command exits are displayed with `!`, separately from tool infrastructure
+errors.
+
+## Evaluation
+
+Six small end-to-end cases exercise cross-file diagnosis, boundary handling,
+state isolation, error semantics, path safety, and idempotency. The runner copies
+each fixture into a temporary workspace, launches the real CLI, injects hidden
+tests only after the agent stops, verifies protected tests were not modified,
+and independently runs the verifier:
+
+```bash
+uv run python scripts/run_evals.py --case all --repeat 1
+uv run python scripts/run_evals.py --case discount-type --repeat 3
+```
+
+Run details are written under the ignored `.eval-results/` directory. They may
+contain model output or source fragments and must not be committed. The concise
+JSON result records pass/fail, process exits, tamper detection, steps, tool-call
+count, and elapsed time; the agent's final answer is never treated as proof of
+correctness.
 
 ## Security boundary
 
@@ -79,6 +106,13 @@ and remote-push commands are blocked.
 
 These guardrails are not an OS sandbox. Run untrusted repositories inside a
 container or VM.
+
+## Known limitations
+
+- Sessions are in memory and cannot be resumed after process exit.
+- Context management evicts complete old turns/rounds rather than summarizing them.
+- Search is a local literal scan intended for small-to-medium repositories.
+- Command filtering and workspace path checks are guardrails, not process isolation.
 
 ## Verification
 
