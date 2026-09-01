@@ -146,7 +146,16 @@ def _console_renderer(stdout: TextIO) -> EventSink:
         elif isinstance(event, ToolStarted):
             stdout.write(f"→ {event.call.name}\n")
         elif isinstance(event, ToolFinished):
-            marker = "✗" if event.outcome.is_error else "✓"
+            if event.outcome.is_error:
+                marker = "✗"
+            elif (
+                event.call.name == "run_command"
+                and event.outcome.exit_code is not None
+                and event.outcome.exit_code != 0
+            ):
+                marker = "!"
+            else:
+                marker = "✓"
             suffix = " (truncated)" if event.outcome.truncated else ""
             summary = ""
             if not event.outcome.is_error and event.call.name in {

@@ -201,12 +201,13 @@ class LocalToolSet:
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         content = self._format_command_result(process.returncode, stdout, stderr, timed_out)
-        bounded = self._bounded(content)
+        bounded = self._bounded(content, exit_code=process.returncode)
         if timed_out:
             return ToolOutcome(
                 f"command timed out after {self.command_timeout_seconds:g}s\n{bounded.content}",
                 is_error=True,
                 truncated=bounded.truncated,
+                exit_code=process.returncode,
             )
         return bounded
 
@@ -262,13 +263,17 @@ class LocalToolSet:
             if temporary_name and os.path.exists(temporary_name):
                 os.unlink(temporary_name)
 
-    def _bounded(self, content: str) -> ToolOutcome:
+    def _bounded(self, content: str, *, exit_code: int | None = None) -> ToolOutcome:
         if len(content) <= self.output_chars:
-            return ToolOutcome(content)
+            return ToolOutcome(content, exit_code=exit_code)
         marker = "\n... output truncated ...\n"
         available = self.output_chars - len(marker)
         head = available // 2
-        return ToolOutcome(content[:head] + marker + content[-(available - head) :], truncated=True)
+        return ToolOutcome(
+            content[:head] + marker + content[-(available - head) :],
+            truncated=True,
+            exit_code=exit_code,
+        )
 
     @staticmethod
     def _format_command_result(exit_code: int, stdout: str, stderr: str, timed_out: bool) -> str:
@@ -438,13 +443,16 @@ _TOOL_DEFINITIONS: tuple[JsonObject, ...] = (
     ),
     _function_tool(
         "search_text",
-        "Search UTF-8 files for a literal string.",
+        "Search UTF-8 files for a literal string. Use it to locate relevant definitions, "
+        "references, or errors before reading large files.",
         {"query": {"type": "string"}, "path": _PATH},
         ["query"],
     ),
     _function_tool(
         "run_command",
-        "Run an argv command without a shell in the workspace.",
+        "Run an argv command without a shell in the workspace. Pass the executable and each "
+        "argument separately; do not use shell syntax. Use relevant tests or executable checks "
+        "after modifying code.",
         {
             "argv": {"type": "array", "items": {"type": "string"}, "minItems": 1},
             "cwd": _PATH,

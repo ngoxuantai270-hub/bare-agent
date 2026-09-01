@@ -74,6 +74,35 @@ def test_cli_shows_safe_write_summary_and_verification_progress(tmp_path: Path) 
     assert verification[0]["pending_files"] == 1
 
 
+def test_cli_distinguishes_nonzero_command_exit_from_tool_failure(tmp_path: Path) -> None:
+    stdout = io.StringIO()
+    model = ScriptedModel(
+        [
+            ModelReply(
+                tool_calls=(
+                    ToolCall(
+                        "command",
+                        "run_command",
+                        json.dumps({"argv": ["python", "-c", "import sys; sys.exit(3)"]}),
+                    ),
+                )
+            ),
+            ModelReply("command inspected"),
+        ]
+    )
+
+    code = main(
+        ["--workspace", str(tmp_path), "inspect command"],
+        model=model,
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert "! run_command — exit_code: 3" in stdout.getvalue()
+    assert "✓ run_command" not in stdout.getvalue()
+
+
 def test_repl_reuses_session_but_reset_and_slash_commands_are_local(tmp_path: Path) -> None:
     stdin = io.StringIO("first\n/unknown\n/reset\nsecond\n/exit\n")
     stdout = io.StringIO()
@@ -226,3 +255,49 @@ def test_jsonl_trace_records_metadata_without_prompts_arguments_or_outputs(tmp_p
     assert records[-1]["status"] == "completed"
     for forbidden in [sensitive, "private-name.txt", "private user task", "private final answer"]:
         assert forbidden not in serialized
+
+
+def test_jsonl_trace_records_command_exit_code(tmp_path: Path) -> None:
+    trace_path = tmp_path / "command.jsonl"
+    model = ScriptedModel(
+        [
+            ModelReply(
+                tool_calls=(
+                    ToolCall(
+                        "command",
+                        "run_command",
+                        json.dumps({"argv": ["python", "-c", "import sys; sys.exit(4)"]}),
+                    ),
+                )
+            ),
+            ModelReply("observed"),
+        ]
+    )
+
+    code = main(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--trace-jsonl",
+            str(trace_path),
+            "inspect command",
+        ],
+        model=model,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    finished = [record for record in records if record["event"] == "tool_finished"]
+    assert code == 0
+    assert finished == [
+        {
+            "timestamp": finished[0]["timestamp"],
+            "event": "tool_finished",
+            "tool": "run_command",
+            "is_error": False,
+            "truncated": False,
+            "output_characters": len("exit_code: 4\ntimed_out: false"),
+            "exit_code": 4,
+        }
+    ]

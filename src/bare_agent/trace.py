@@ -49,6 +49,8 @@ class JsonlEventWriter:
                     "output_characters": len(event.outcome.content),
                 }
             )
+            if event.outcome.exit_code is not None:
+                record["exit_code"] = event.outcome.exit_code
         elif isinstance(event, VerificationRequired):
             record.update(
                 {

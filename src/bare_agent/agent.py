@@ -29,6 +29,8 @@ DEFAULT_SYSTEM_PROMPT = """You are a coding agent operating in a local workspace
 Inspect the project before changing it. Use the provided tools to read, edit, and test code.
 Continue until the user's programming task is complete or a tool reports a blocker.
 Use workspace-relative paths. Never invent tool results. Prefer focused, reversible changes.
+Do not modify tests merely to hide a bug unless the user explicitly requests changed behavior.
+When relevant tests or executable checks exist, run them before claiming success.
 Finish with a concise summary of changes and verification performed."""
 
 VERIFICATION_PROMPT = """VERIFICATION REQUIRED: Files were modified in this task.
@@ -209,7 +211,11 @@ class BareAgent:
             if path is not None:
                 pending_files.discard(path)
             return
-        if call.name == "run_command" and outcome.content.startswith("exit_code: 0\n"):
+        if (
+            call.name == "run_command"
+            and outcome.exit_code == 0
+            and _is_verification_command(arguments.get("argv"))
+        ):
             pending_files.clear()
 
     @staticmethod
@@ -230,3 +236,19 @@ def _normalized_path(value: object) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     return posixpath.normpath(value.replace("\\", "/"))
+
+
+def _is_verification_command(value: object) -> bool:
+    if not isinstance(value, list) or not value or not all(isinstance(item, str) for item in value):
+        return False
+    argv = list(value)
+    executable = posixpath.basename(argv[0]).lower()
+    if executable == "uv" and len(argv) > 2 and argv[1] == "run":
+        return _is_verification_command(argv[2:])
+    if executable == "pytest":
+        return True
+    if (executable == "python" or executable.startswith("python3")) and len(argv) > 2:
+        return argv[1] == "-m" and argv[2] in {"pytest", "unittest"}
+    if executable in {"npm", "pnpm", "yarn"} and len(argv) > 1:
+        return argv[1] == "test" or (len(argv) > 2 and argv[1:3] == ["run", "test"])
+    return executable in {"cargo", "go"} and len(argv) > 1 and argv[1] == "test"

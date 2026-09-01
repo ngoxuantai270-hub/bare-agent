@@ -4,6 +4,8 @@ import json
 from collections.abc import Iterable
 from pathlib import Path
 
+import pytest
+
 from bare_agent.agent import BareAgent
 from bare_agent.model import ModelError, ScriptedModel
 from bare_agent.tools import LocalToolSet
@@ -134,6 +136,106 @@ def test_reading_a_different_file_does_not_verify_a_write(tmp_path: Path) -> Non
             ModelReply("again done"),
         ],
     )
+
+    result = agent.run("write and verify target.txt")
+
+    assert result.status == "stopped"
+    assert result.reason == "verification_required"
+
+
+def test_successful_inspection_command_does_not_verify_a_write(tmp_path: Path) -> None:
+    agent, _ = agent_for(
+        tmp_path,
+        [
+            ModelReply(
+                tool_calls=(
+                    call("write", "write_file", {"path": "target.txt", "content": "target"}),
+                    call("inspect", "run_command", {"argv": ["ls"]}),
+                )
+            ),
+            ModelReply("done without a real verification"),
+            ModelReply("still done"),
+            ModelReply("again done"),
+        ],
+    )
+
+    result = agent.run("write and verify target.txt")
+
+    assert result.status == "stopped"
+    assert result.reason == "verification_required"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pytest", "-q"],
+        ["python", "-m", "pytest", "-q"],
+        ["python3", "-m", "unittest"],
+        ["uv", "run", "pytest", "-q"],
+        ["uv", "run", "python", "-m", "pytest"],
+        ["npm", "test"],
+        ["npm", "run", "test"],
+        ["pnpm", "test"],
+        ["yarn", "test"],
+        ["cargo", "test"],
+        ["go", "test", "./..."],
+    ],
+)
+def test_successful_test_commands_verify_file_changes(tmp_path: Path, argv: list[str]) -> None:
+    class SuccessfulTools:
+        definitions: tuple[dict[str, object], ...] = ()
+
+        def invoke(self, tool_call: ToolCall):
+            from bare_agent.types import ToolOutcome
+
+            if tool_call.name == "run_command":
+                return ToolOutcome("exit_code: 0\ntimed_out: false", exit_code=0)
+            return ToolOutcome("wrote file")
+
+    model = ScriptedModel(
+        [
+            ModelReply(
+                tool_calls=(
+                    call("write", "write_file", {"path": "target.txt", "content": "target"}),
+                    call("verify", "run_command", {"argv": argv}),
+                )
+            ),
+            ModelReply("verified"),
+        ]
+    )
+    agent = BareAgent(model, SuccessfulTools())
+
+    result = agent.run("write and verify target.txt")
+
+    assert result.status == "completed"
+    assert result.final_text == "verified"
+
+
+def test_failing_test_command_does_not_verify_file_changes(tmp_path: Path) -> None:
+    class FailingTestTools:
+        definitions: tuple[dict[str, object], ...] = ()
+
+        def invoke(self, tool_call: ToolCall):
+            from bare_agent.types import ToolOutcome
+
+            if tool_call.name == "run_command":
+                return ToolOutcome("exit_code: 1\ntimed_out: false", exit_code=1)
+            return ToolOutcome("wrote file")
+
+    model = ScriptedModel(
+        [
+            ModelReply(
+                tool_calls=(
+                    call("write", "write_file", {"path": "target.txt", "content": "target"}),
+                    call("verify", "run_command", {"argv": ["pytest", "-q"]}),
+                )
+            ),
+            ModelReply("done despite failing tests"),
+            ModelReply("still done"),
+            ModelReply("again done"),
+        ]
+    )
+    agent = BareAgent(model, FailingTestTools())
 
     result = agent.run("write and verify target.txt")
 

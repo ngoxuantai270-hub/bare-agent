@@ -19,6 +19,7 @@ class ToolOutcome:
     content: str
     is_error: bool = False
     truncated: bool = False
+    exit_code: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

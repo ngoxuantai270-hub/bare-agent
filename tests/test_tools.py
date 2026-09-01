@@ -104,6 +104,7 @@ def test_command_reports_nonzero_exit_without_infrastructure_error(tmp_path: Pat
     )
 
     assert not result.is_error
+    assert result.exit_code == 7
     assert "exit_code: 7" in result.content
     assert "out" in result.content
 
@@ -138,6 +139,7 @@ def test_command_timeout_and_secret_environment_filtering(tmp_path: Path, monkey
     assert "kept" in env_result.content
     assert "must-not-leak" not in env_result.content
     assert timeout.is_error and "timed out" in timeout.content
+    assert timeout.exit_code is not None
 
 
 def test_bad_json_unknown_tool_and_invalid_arguments_become_results(tmp_path: Path) -> None:
