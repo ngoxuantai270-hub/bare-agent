@@ -27,6 +27,53 @@ def test_one_shot_cli_returns_zero_and_prints_answer(tmp_path: Path) -> None:
     assert model.requests[0].messages[-1]["content"] == "fix the task"
 
 
+def test_cli_shows_safe_write_summary_and_verification_progress(tmp_path: Path) -> None:
+    stdout = io.StringIO()
+    trace_path = tmp_path / "verification.jsonl"
+    model = ScriptedModel(
+        [
+            ModelReply(
+                tool_calls=(
+                    ToolCall(
+                        "write",
+                        "write_file",
+                        json.dumps({"path": "README.md", "content": "Hello World"}),
+                    ),
+                )
+            ),
+            ModelReply("premature final"),
+            ModelReply(
+                tool_calls=(ToolCall("read", "read_file", json.dumps({"path": "README.md"})),)
+            ),
+            ModelReply("verified final"),
+        ]
+    )
+
+    code = main(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--trace-jsonl",
+            str(trace_path),
+            "create README",
+        ],
+        model=model,
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert "wrote 11 characters to README.md" in stdout.getvalue()
+    assert "verification required for 1 changed file" in stdout.getvalue()
+    assert "premature final" not in stdout.getvalue()
+    assert "verified final" in stdout.getvalue()
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    verification = [record for record in records if record["event"] == "verification_required"]
+    assert len(verification) == 1
+    assert verification[0]["attempt"] == 1
+    assert verification[0]["pending_files"] == 1
+
+
 def test_repl_reuses_session_but_reset_and_slash_commands_are_local(tmp_path: Path) -> None:
     stdin = io.StringIO("first\n/unknown\n/reset\nsecond\n/exit\n")
     stdout = io.StringIO()
@@ -134,6 +181,15 @@ def test_jsonl_trace_records_metadata_without_prompts_arguments_or_outputs(tmp_p
                     ToolCall("call-2", sensitive, "{}"),
                 ),
             ),
+            ModelReply(
+                tool_calls=(
+                    ToolCall(
+                        "call-3",
+                        "read_file",
+                        json.dumps({"path": "private-name.txt"}),
+                    ),
+                )
+            ),
             ModelReply("private final answer"),
         ]
     )
@@ -156,6 +212,8 @@ def test_jsonl_trace_records_metadata_without_prompts_arguments_or_outputs(tmp_p
     assert code == 0
     assert [record["event"] for record in records] == [
         "model_text",
+        "tool_started",
+        "tool_finished",
         "tool_started",
         "tool_finished",
         "tool_started",

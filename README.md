@@ -59,6 +59,13 @@ whole completed rounds, so tool-call/result pairs never become orphaned. Runs
 stop on a final model answer, configured limits, repeated tool batches, context
 exhaustion, model failure, or interruption.
 
+Successful `write_file` and `edit_file` calls create a pending-verification
+obligation. BareAgent will reject a premature final answer until the changed
+file is read back, or a relevant command exits successfully. Repeated refusal
+to verify stops the run with `verification_required` instead of claiming
+success. The terminal prints safe write/edit character or path summaries so a
+surprising mutation is visible without exposing file contents.
+
 ## Security boundary
 
 Credentials are read from process environment variables or the ignored local

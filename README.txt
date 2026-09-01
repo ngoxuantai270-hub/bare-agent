@@ -6,6 +6,6 @@ BareAgent 是一个从零实现的命令行编程智能体，不依赖 Agent 框
 内存 REPL：uv run bare-agent --workspace ./project
 命令：/help、/status、/reset、/exit。退出后历史不会保存。可用 --trace-jsonl 文件名记录不含任务、模型正文、工具参数及输出的事件元数据。
 
-内置工具：read_file、write_file、edit_file、glob_files、search_text、run_command。路径限制在工作区内；命令使用 argv 且 shell=False，并有超时、输出截断、敏感环境变量过滤和危险命令拦截。上述措施不是操作系统级沙箱，运行不可信代码仍建议使用容器。
+内置工具：read_file、write_file、edit_file、glob_files、search_text、run_command。写入或编辑后必须回读对应文件或成功运行验证命令，否则不接受最终回答。路径限制在工作区内；命令使用 argv 且 shell=False，并有超时、输出截断、敏感环境变量过滤、进程清理和危险命令拦截。上述措施不是操作系统级沙箱，运行不可信代码仍建议使用容器。
 
 验证：uv run --extra dev pytest --cov=bare_agent；uv run --extra dev ruff check .；uv run --extra dev mypy src；uv build。示例缺陷工程位于 examples/bugfix_demo。

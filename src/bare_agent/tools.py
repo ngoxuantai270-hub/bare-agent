@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import signal
+import stat
 import subprocess
 import tempfile
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import suppress
 from pathlib import Path
 
 from bare_agent.types import JsonObject, ToolCall, ToolOutcome
@@ -20,7 +22,8 @@ _IGNORED_PARTS = {
     "node_modules",
     "venv",
 }
-_SENSITIVE_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_SENSITIVE_ENV_WORDS = {"CREDENTIAL", "CREDENTIALS", "KEY", "PASSWORD", "SECRET", "TOKEN"}
+_SENSITIVE_ENV_NAMES = {"GIT_ASKPASS", "SSH_ASKPASS", "SSH_AUTH_SOCK"}
 
 
 class ToolInputError(ValueError):
@@ -189,8 +192,12 @@ class LocalToolSet:
             stdout_bytes, stderr_bytes = process.communicate(timeout=self.command_timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            os.killpg(process.pid, signal.SIGKILL)
+            self._kill_process_group(process.pid)
             stdout_bytes, stderr_bytes = process.communicate()
+        except KeyboardInterrupt:
+            self._kill_process_group(process.pid)
+            process.communicate()
+            raise
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
         content = self._format_command_result(process.returncode, stdout, stderr, timed_out)
@@ -202,6 +209,11 @@ class LocalToolSet:
                 truncated=bounded.truncated,
             )
         return bounded
+
+    @staticmethod
+    def _kill_process_group(pid: int) -> None:
+        with suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGKILL)
 
     def _path(self, raw: str, *, must_exist: bool = False) -> Path:
         relative = Path(raw)
@@ -230,7 +242,7 @@ class LocalToolSet:
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
-        mode = path.stat().st_mode if path.exists() else None
+        mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
         temporary_name = ""
         try:
             with tempfile.NamedTemporaryFile(
@@ -244,8 +256,7 @@ class LocalToolSet:
                 temporary.flush()
                 os.fsync(temporary.fileno())
                 temporary_name = temporary.name
-            if mode is not None:
-                os.chmod(temporary_name, mode)
+            os.chmod(temporary_name, mode)
             os.replace(temporary_name, path)
         finally:
             if temporary_name and os.path.exists(temporary_name):
@@ -270,11 +281,13 @@ class LocalToolSet:
 
     @staticmethod
     def _sanitized_environment() -> dict[str, str]:
-        return {
+        environment = {
             key: value
             for key, value in os.environ.items()
-            if not any(marker in key.upper() for marker in _SENSITIVE_ENV_MARKERS)
+            if not _is_sensitive_environment_name(key)
         }
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        return environment
 
     @staticmethod
     def _validate_command(argv: list[str]) -> None:
@@ -282,8 +295,24 @@ class LocalToolSet:
         blocked = {"dd", "doas", "halt", "mkfs", "poweroff", "reboot", "shutdown", "su", "sudo"}
         if executable in blocked:
             raise ToolInputError(f"command is blocked by safety policy: {executable}")
-        if executable == "git" and len(argv) > 1 and argv[1] in {"push", "remote"}:
-            raise ToolInputError("remote-changing git commands are blocked")
+        if executable == "git" and len(argv) > 1:
+            if argv[1] == "push":
+                raise ToolInputError("remote-changing git commands are blocked")
+            if argv[1] == "remote" and any(
+                item
+                in {
+                    "add",
+                    "prune",
+                    "remove",
+                    "rename",
+                    "set-branches",
+                    "set-head",
+                    "set-url",
+                    "update",
+                }
+                for item in argv[2:]
+            ):
+                raise ToolInputError("remote-changing git commands are blocked")
         if executable == "rm" and any(
             item in {"-r", "-R", "-rf", "-fr", "--recursive", "--force"} for item in argv[1:]
         ):
@@ -344,6 +373,16 @@ class LocalToolSet:
         if value < minimum or (maximum is not None and value > maximum):
             raise ToolInputError(f"{key} is outside the allowed range")
         return value
+
+
+def _is_sensitive_environment_name(name: str) -> bool:
+    upper = name.upper()
+    if upper in _SENSITIVE_ENV_NAMES or upper == "GIT_CONFIG_COUNT":
+        return True
+    if upper.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+        return True
+    words = upper.replace("-", "_").split("_")
+    return any(word in _SENSITIVE_ENV_WORDS for word in words)
 
 
 def _function_tool(

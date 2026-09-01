@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import posixpath
 import time
 from collections.abc import Callable
 from typing import Protocol
@@ -20,6 +22,7 @@ from bare_agent.types import (
     ToolFinished,
     ToolOutcome,
     ToolStarted,
+    VerificationRequired,
 )
 
 DEFAULT_SYSTEM_PROMPT = """You are a coding agent operating in a local workspace.
@@ -27,6 +30,11 @@ Inspect the project before changing it. Use the provided tools to read, edit, an
 Continue until the user's programming task is complete or a tool reports a blocker.
 Use workspace-relative paths. Never invent tool results. Prefer focused, reversible changes.
 Finish with a concise summary of changes and verification performed."""
+
+VERIFICATION_PROMPT = """VERIFICATION REQUIRED: Files were modified in this task.
+Before giving a final answer, inspect every changed file with read_file, or run a relevant
+verification command that exits with code 0. Compare the observed result with the original
+user request. If anything is incomplete or incorrect, fix it and verify again."""
 
 EventSink = Callable[[AgentEvent], None]
 
@@ -83,6 +91,8 @@ class BareAgent:
         used_ids = session._tool_call_ids()
         previous_batch: tuple[tuple[str, str], ...] | None = None
         repeated_batches = 0
+        pending_verification: set[str] = set()
+        verification_rejections = 0
 
         def finish(status: RunStatus, reason: str, final_text: str = "") -> RunResult:
             active.final_text = final_text if status == "completed" else None
@@ -95,8 +105,11 @@ class BareAgent:
         try:
             while steps < self.limits.max_steps:
                 try:
+                    active_system_prompt = self.system_prompt
+                    if pending_verification:
+                        active_system_prompt = f"{self.system_prompt}\n\n{VERIFICATION_PROMPT}"
                     messages = build_context(
-                        self.system_prompt,
+                        active_system_prompt,
                         session._completed_turns(),
                         active,
                         self.limits.context_char_budget,
@@ -110,10 +123,24 @@ class BareAgent:
                 except ModelError:
                     return finish("failed", "model_error")
                 steps += 1
+                if not reply.tool_calls:
+                    if pending_verification:
+                        verification_rejections += 1
+                        self._emit(
+                            on_event,
+                            VerificationRequired(
+                                attempt=verification_rejections,
+                                pending_files=len(pending_verification),
+                            ),
+                        )
+                        if verification_rejections > self.limits.max_verification_retries:
+                            return finish("stopped", "verification_required")
+                        continue
+                    if reply.text:
+                        self._emit(on_event, ModelText(reply.text))
+                    return finish("completed", "final_answer", reply.text)
                 if reply.text:
                     self._emit(on_event, ModelText(reply.text))
-                if not reply.tool_calls:
-                    return finish("completed", "final_answer", reply.text)
                 if not self._valid_call_ids(reply, used_ids):
                     return finish("failed", "protocol_error")
                 if tool_count + len(reply.tool_calls) > self.limits.max_tool_calls:
@@ -141,6 +168,7 @@ class BareAgent:
                     outcomes.append(outcome)
                     tool_count += 1
                     used_ids.add(call.id)
+                    self._update_verification_state(call, outcome, pending_verification)
                     self._emit(on_event, ToolFinished(call, outcome))
                 active.rounds.append(CompletedRound(reply.text, reply.tool_calls, tuple(outcomes)))
             return finish("stopped", "max_steps")
@@ -163,6 +191,42 @@ class BareAgent:
         return all(ids) and len(ids) == len(set(ids)) and not used_ids.intersection(ids)
 
     @staticmethod
+    def _update_verification_state(
+        call: ToolCall,
+        outcome: ToolOutcome,
+        pending_files: set[str],
+    ) -> None:
+        if outcome.is_error:
+            return
+        arguments = _tool_arguments(call)
+        if call.name in {"write_file", "edit_file"}:
+            path = _normalized_path(arguments.get("path"))
+            if path is not None:
+                pending_files.add(path)
+            return
+        if call.name == "read_file":
+            path = _normalized_path(arguments.get("path"))
+            if path is not None:
+                pending_files.discard(path)
+            return
+        if call.name == "run_command" and outcome.content.startswith("exit_code: 0\n"):
+            pending_files.clear()
+
+    @staticmethod
     def _emit(sink: EventSink | None, event: AgentEvent) -> None:
         if sink is not None:
             sink(event)
+
+
+def _tool_arguments(call: ToolCall) -> dict[str, object]:
+    try:
+        arguments = json.loads(call.arguments_json)
+    except json.JSONDecodeError:
+        return {}
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def _normalized_path(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return posixpath.normpath(value.replace("\\", "/"))

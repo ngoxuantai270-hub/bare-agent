@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from bare_agent.tools import LocalToolSet
 from bare_agent.types import ToolCall
@@ -26,6 +31,7 @@ def test_file_tools_support_read_write_and_unique_edit(tmp_path: Path) -> None:
     assert read.content == "2: two"
     assert not edited.is_error
     assert (tmp_path / "src/app.py").read_text() == "one\nthree\n"
+    assert stat.S_IMODE((tmp_path / "src/app.py").stat().st_mode) == 0o644
 
 
 def test_edit_rejects_missing_or_non_unique_text(tmp_path: Path) -> None:
@@ -104,6 +110,7 @@ def test_command_reports_nonzero_exit_without_infrastructure_error(tmp_path: Pat
 
 def test_command_timeout_and_secret_environment_filtering(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BARE_AGENT_TEST_SECRET", "must-not-leak")
+    monkeypatch.setenv("BARE_AGENT_MONKEY", "kept")
     tools = LocalToolSet(tmp_path, command_timeout_seconds=0.1)
 
     env_result = invoke(
@@ -113,7 +120,11 @@ def test_command_timeout_and_secret_environment_filtering(tmp_path: Path, monkey
             "argv": [
                 "python3",
                 "-c",
-                "import os; print(os.getenv('BARE_AGENT_TEST_SECRET', 'filtered'))",
+                (
+                    "import os; "
+                    "print(os.getenv('BARE_AGENT_TEST_SECRET', 'filtered')); "
+                    "print(os.getenv('BARE_AGENT_MONKEY', 'missing'))"
+                ),
             ]
         },
     )
@@ -124,6 +135,7 @@ def test_command_timeout_and_secret_environment_filtering(tmp_path: Path, monkey
     )
 
     assert "filtered" in env_result.content
+    assert "kept" in env_result.content
     assert "must-not-leak" not in env_result.content
     assert timeout.is_error and "timed out" in timeout.content
 
@@ -150,3 +162,58 @@ def test_obvious_destructive_remote_and_inline_shell_commands_are_blocked(tmp_pa
     assert recursive_delete.is_error and "deletion" in recursive_delete.content
     assert remote_push.is_error and "remote" in remote_push.content
     assert inline_shell.is_error and "structured argv" in inline_shell.content
+
+
+def test_read_only_git_remote_inspection_is_allowed(tmp_path: Path) -> None:
+    tools = LocalToolSet(tmp_path)
+    initialized = invoke(tools, "run_command", {"argv": ["git", "init", "-q"]})
+    inspected = invoke(tools, "run_command", {"argv": ["git", "remote", "-v"]})
+    changed = invoke(
+        tools,
+        "run_command",
+        {"argv": ["git", "remote", "add", "origin", "https://example.invalid/repo"]},
+    )
+
+    assert not initialized.is_error and "exit_code: 0" in initialized.content
+    assert not inspected.is_error and "exit_code: 0" in inspected.content
+    assert changed.is_error and "remote" in changed.content
+
+
+def test_command_output_keeps_head_and_tail_when_truncated(tmp_path: Path) -> None:
+    tools = LocalToolSet(tmp_path, output_chars=256)
+
+    result = invoke(
+        tools,
+        "run_command",
+        {"argv": ["python", "-c", "print('HEAD' + 'x' * 500 + 'TAIL')"]},
+    )
+
+    assert result.truncated
+    assert "HEAD" in result.content
+    assert "TAIL" in result.content
+    assert "output truncated" in result.content
+
+
+def test_keyboard_interrupt_kills_command_process_group(tmp_path: Path, monkeypatch) -> None:
+    class InterruptingProcess:
+        pid = 43210
+        returncode = -2
+        calls = 0
+
+        def communicate(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise KeyboardInterrupt
+            return b"", b""
+
+    process = InterruptingProcess()
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(os, "killpg", lambda pid, sig: killed.append((pid, sig)))
+    tools = LocalToolSet(tmp_path)
+
+    with pytest.raises(KeyboardInterrupt):
+        invoke(tools, "run_command", {"argv": ["python", "-c", "pass"]})
+
+    assert killed == [(process.pid, 9)]
+    assert process.calls == 2

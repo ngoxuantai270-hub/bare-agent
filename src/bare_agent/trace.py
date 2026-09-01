@@ -11,6 +11,7 @@ from bare_agent.types import (
     RunFinished,
     ToolFinished,
     ToolStarted,
+    VerificationRequired,
 )
 
 _KNOWN_TOOL_NAMES = {
@@ -48,6 +49,13 @@ class JsonlEventWriter:
                     "output_characters": len(event.outcome.content),
                 }
             )
+        elif isinstance(event, VerificationRequired):
+            record.update(
+                {
+                    "attempt": event.attempt,
+                    "pending_files": event.pending_files,
+                }
+            )
         elif isinstance(event, RunFinished):
             record.update(
                 {
@@ -72,6 +80,8 @@ def _event_name(event: AgentEvent) -> str:
         return "tool_started"
     if isinstance(event, ToolFinished):
         return "tool_finished"
+    if isinstance(event, VerificationRequired):
+        return "verification_required"
     return "run_finished"
 
 

@@ -40,6 +40,7 @@ class RunLimits:
     context_char_budget: int = 60_000
     command_timeout_seconds: float = 30.0
     tool_output_chars: int = 16_000
+    max_verification_retries: int = 2
 
     def __post_init__(self) -> None:
         if self.max_steps < 1 or self.max_tool_calls < 1:
@@ -48,6 +49,8 @@ class RunLimits:
             raise ValueError("context and timeout limits must be positive")
         if self.tool_output_chars < 256:
             raise ValueError("tool output limit must be at least 256 characters")
+        if self.max_verification_retries < 0:
+            raise ValueError("verification retry limit must not be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +80,14 @@ class ToolFinished:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationRequired:
+    attempt: int
+    pending_files: int
+
+
+@dataclass(frozen=True, slots=True)
 class RunFinished:
     result: RunResult
 
 
-AgentEvent: TypeAlias = ModelText | ToolStarted | ToolFinished | RunFinished
+AgentEvent: TypeAlias = ModelText | ToolStarted | ToolFinished | VerificationRequired | RunFinished

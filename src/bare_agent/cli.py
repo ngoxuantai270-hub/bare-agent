@@ -18,6 +18,7 @@ from bare_agent.types import (
     RunLimits,
     ToolFinished,
     ToolStarted,
+    VerificationRequired,
 )
 
 
@@ -147,7 +148,16 @@ def _console_renderer(stdout: TextIO) -> EventSink:
         elif isinstance(event, ToolFinished):
             marker = "✗" if event.outcome.is_error else "✓"
             suffix = " (truncated)" if event.outcome.truncated else ""
-            stdout.write(f"{marker} {event.call.name}{suffix}\n")
+            summary = ""
+            if not event.outcome.is_error and event.call.name in {
+                "edit_file",
+                "run_command",
+                "write_file",
+            }:
+                summary = f" — {event.outcome.content.splitlines()[0]}"
+            stdout.write(f"{marker} {event.call.name}{suffix}{summary}\n")
+        elif isinstance(event, VerificationRequired):
+            stdout.write(f"↻ verification required for {event.pending_files} changed file(s)\n")
         elif isinstance(event, RunFinished) and event.result.status != "completed":
             stdout.write(f"[{event.result.status}: {event.result.reason}]\n")
         stdout.flush()

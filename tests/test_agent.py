@@ -7,7 +7,7 @@ from pathlib import Path
 from bare_agent.agent import BareAgent
 from bare_agent.model import ModelError, ScriptedModel
 from bare_agent.tools import LocalToolSet
-from bare_agent.types import ModelReply, RunLimits, ToolCall
+from bare_agent.types import ModelReply, RunLimits, ToolCall, VerificationRequired
 
 
 def call(call_id: str, name: str, arguments: dict[str, object]) -> ToolCall:
@@ -58,6 +58,87 @@ def test_agent_pairs_every_tool_call_before_next_model_request(tmp_path: Path) -
     assert [item["id"] for item in assistant["tool_calls"]] == ["write-1", "read-1"]
     assert [item["tool_call_id"] for item in tool_messages] == ["write-1", "read-1"]
     assert all(item["role"] == "tool" for item in tool_messages)
+
+
+def test_agent_rejects_unverified_final_and_recovers_wrong_file_write(tmp_path: Path) -> None:
+    replies = [
+        ModelReply(
+            tool_calls=(call("wrong", "write_file", {"path": "README.md", "content": "H.\n"}),)
+        ),
+        ModelReply('Created README.md containing "H.".'),
+        ModelReply(tool_calls=(call("inspect-wrong", "read_file", {"path": "README.md"}),)),
+        ModelReply(
+            tool_calls=(
+                call(
+                    "correct",
+                    "write_file",
+                    {"path": "README.md", "content": "Hello World\n"},
+                ),
+            )
+        ),
+        ModelReply(tool_calls=(call("inspect-correct", "read_file", {"path": "README.md"}),)),
+        ModelReply('Created README.md containing "Hello World".'),
+    ]
+    agent, model = agent_for(tmp_path, replies)
+    events = []
+
+    result = agent.run(
+        'Create README.md whose complete content is "Hello World".',
+        on_event=events.append,
+    )
+
+    assert result.status == "completed"
+    assert result.final_text == 'Created README.md containing "Hello World".'
+    assert (tmp_path / "README.md").read_text() == "Hello World\n"
+    assert result.steps == 6
+    assert result.tool_calls == 4
+    assert any(isinstance(event, VerificationRequired) for event in events)
+    assert "VERIFICATION REQUIRED" in model.requests[1].messages[0]["content"]
+    assert 'containing "H."' not in str(model.requests[2].messages)
+
+
+def test_agent_stops_after_repeated_unverified_final_answers(tmp_path: Path) -> None:
+    agent, _ = agent_for(
+        tmp_path,
+        [
+            ModelReply(
+                tool_calls=(call("write", "write_file", {"path": "a.txt", "content": "x"}),)
+            ),
+            ModelReply("done without checking"),
+            ModelReply("still done without checking"),
+            ModelReply("again done without checking"),
+        ],
+    )
+
+    result = agent.run("write the requested file")
+
+    assert result.status == "stopped"
+    assert result.reason == "verification_required"
+    assert result.steps == 4
+    assert result.tool_calls == 1
+
+
+def test_reading_a_different_file_does_not_verify_a_write(tmp_path: Path) -> None:
+    (tmp_path / "other.txt").write_text("other\n")
+    agent, _ = agent_for(
+        tmp_path,
+        [
+            ModelReply(
+                tool_calls=(
+                    call("write", "write_file", {"path": "target.txt", "content": "target"}),
+                    call("wrong-read", "read_file", {"path": "other.txt"}),
+                )
+            ),
+            ModelReply("done"),
+            ModelReply("still done"),
+            ModelReply("again done"),
+        ],
+    )
+
+    result = agent.run("write and verify target.txt")
+
+    assert result.status == "stopped"
+    assert result.reason == "verification_required"
 
 
 def test_tool_errors_are_observations_and_keep_protocol_valid(tmp_path: Path) -> None:
@@ -121,6 +202,7 @@ def test_session_reuses_complete_history_and_reset_clears_it(tmp_path: Path) -> 
         tmp_path,
         [
             ModelReply(tool_calls=(call("w", "write_file", {"path": "a", "content": "x"}),)),
+            ModelReply(tool_calls=(call("r", "read_file", {"path": "a"}),)),
             ModelReply("first done"),
             ModelReply("second done"),
             ModelReply("after reset"),
@@ -131,18 +213,27 @@ def test_session_reuses_complete_history_and_reset_clears_it(tmp_path: Path) -> 
     first = agent.submit(session, "first task")
     second = agent.submit(session, "explain the previous task")
 
-    assert first.tool_calls == 1
+    assert first.tool_calls == 2
     assert second.steps == 1 and second.tool_calls == 0
-    roles = [message["role"] for message in model.requests[2].messages]
-    assert roles == ["system", "user", "assistant", "tool", "assistant", "user"]
-    assert model.requests[2].messages[-1]["content"] == "explain the previous task"
+    roles = [message["role"] for message in model.requests[3].messages]
+    assert roles == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert model.requests[3].messages[-1]["content"] == "explain the previous task"
     assert session.turn_count == 2
 
     session.reset()
     agent.submit(session, "new start")
 
     assert session.turn_count == 1
-    assert [message["role"] for message in model.requests[3].messages] == ["system", "user"]
+    assert [message["role"] for message in model.requests[4].messages] == ["system", "user"]
 
 
 def test_one_shot_run_uses_a_fresh_temporary_session(tmp_path: Path) -> None:
