@@ -4,7 +4,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 
 from bare_agent import __version__
 from bare_agent.agent import BareAgent, EventSink
@@ -116,7 +116,14 @@ def _run_repl(
         task = line.strip()
         if not task:
             continue
-        if task.startswith("/"):
+        if task == "/multi":
+            action, multiline_task = _read_multiline_task(stdin, stdout)
+            if action == "eof":
+                return 0
+            if action == "cancel":
+                continue
+            task = multiline_task
+        elif task.startswith("/"):
             if task == "/exit":
                 return 0
             if task == "/reset":
@@ -127,6 +134,7 @@ def _run_repl(
                 stdout.write(
                     "/help   show commands\n"
                     "/status show in-memory session status\n"
+                    "/multi  enter multiline input mode\n"
                     "/reset  clear in-memory history\n"
                     "/exit   quit\n"
                 )
@@ -137,6 +145,36 @@ def _run_repl(
             stderr.write(f"Unknown command: {task}\n")
             continue
         agent.submit(session, task, on_event=renderer)
+
+
+def _read_multiline_task(
+    stdin: TextIO,
+    stdout: TextIO,
+) -> tuple[Literal["submit", "cancel", "eof"], str]:
+    stdout.write("Multiline mode. Enter /send to submit or /cancel to discard.\n")
+    lines: list[str] = []
+    while True:
+        try:
+            stdout.write("...> ")
+            stdout.flush()
+            line = stdin.readline()
+        except KeyboardInterrupt:
+            stdout.write("\nMultiline input cancelled.\n")
+            return "cancel", ""
+        if line == "":
+            stdout.write("\nMultiline input discarded.\n")
+            return "eof", ""
+        content = line.rstrip("\r\n")
+        if content == "/cancel":
+            stdout.write("Multiline input cancelled.\n")
+            return "cancel", ""
+        if content == "/send":
+            task = "\n".join(lines)
+            if not task.strip():
+                stdout.write("Multiline input is empty; continue typing or /cancel.\n")
+                continue
+            return "submit", task
+        lines.append(content)
 
 
 def _console_renderer(stdout: TextIO) -> EventSink:

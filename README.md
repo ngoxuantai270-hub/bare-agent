@@ -28,9 +28,11 @@ The configuration script defaults to `deepseek-v4-flash` and
 variables take precedence. The script does not modify a shell profile or print
 the API key.
 
-The REPL supports `/help`, `/status`, `/reset`, and `/exit`. It preserves prior user turns,
-assistant tool calls, matching tool results, and final answers only for the life
-of the current process. One-shot and REPL modes share the same agent loop.
+The REPL supports `/help`, `/status`, `/multi`, `/reset`, and `/exit`. In multiline mode,
+Enter inserts a newline, `/send` submits the complete task, and `/cancel` discards it.
+The REPL preserves prior user turns, assistant tool calls, matching tool results,
+and final answers only for the life of the current process. One-shot and REPL
+modes share the same agent loop.
 
 V1.1 adds an opt-in privacy-minimized event trace:
 

@@ -124,6 +124,140 @@ def test_repl_reuses_session_but_reset_and_slash_commands_are_local(tmp_path: Pa
     assert "Session reset" in stdout.getvalue()
 
 
+def test_repl_multiline_submits_one_task_with_blank_lines_and_indentation(tmp_path: Path) -> None:
+    stdin = io.StringIO("/multi\nfirst line\n\n  indented code\n/send\n/exit\n")
+    stdout = io.StringIO()
+    model = ScriptedModel([ModelReply("multiline received")])
+
+    code = main(
+        ["--workspace", str(tmp_path)],
+        model=model,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert len(model.requests) == 1
+    assert model.requests[0].messages[-1]["content"] == "first line\n\n  indented code"
+    assert "Multiline mode" in stdout.getvalue()
+    assert "...> " in stdout.getvalue()
+
+
+def test_repl_multiline_cancel_discards_buffer_and_returns_to_single_line(tmp_path: Path) -> None:
+    stdin = io.StringIO("/multi\ndiscard me\n/cancel\nsingle task\n/exit\n")
+    stdout = io.StringIO()
+    model = ScriptedModel([ModelReply("single received")])
+
+    code = main(
+        ["--workspace", str(tmp_path)],
+        model=model,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert len(model.requests) == 1
+    assert model.requests[0].messages[-1]["content"] == "single task"
+    assert "Multiline input cancelled" in stdout.getvalue()
+
+
+def test_repl_multiline_treats_slash_commands_as_content(tmp_path: Path) -> None:
+    stdin = io.StringIO("/multi\n/help\n/status\n/send\n/exit\n")
+    model = ScriptedModel([ModelReply("received")])
+
+    code = main(
+        ["--workspace", str(tmp_path)],
+        model=model,
+        stdin=stdin,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert model.requests[0].messages[-1]["content"] == "/help\n/status"
+
+
+def test_repl_multiline_empty_send_stays_in_mode(tmp_path: Path) -> None:
+    stdin = io.StringIO("/multi\n/send\nactual task\n/send\n/exit\n")
+    stdout = io.StringIO()
+    model = ScriptedModel([ModelReply("received")])
+
+    code = main(
+        ["--workspace", str(tmp_path)],
+        model=model,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert len(model.requests) == 1
+    assert model.requests[0].messages[-1]["content"] == "actual task"
+    assert "Multiline input is empty" in stdout.getvalue()
+
+
+def test_repl_multiline_eof_discards_unsubmitted_buffer(tmp_path: Path) -> None:
+    stdin = io.StringIO("/multi\npartial task\n")
+    stdout = io.StringIO()
+    model = ScriptedModel([])
+
+    code = main(
+        ["--workspace", str(tmp_path)],
+        model=model,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert model.requests == []
+    assert "Multiline input discarded" in stdout.getvalue()
+
+
+def test_repl_multiline_keyboard_interrupt_cancels_only_the_buffer(tmp_path: Path) -> None:
+    class InterruptingInput(io.StringIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.lines = iter(["/multi\n", KeyboardInterrupt(), "after interrupt\n", "/exit\n"])
+
+        def readline(self, size: int = -1) -> str:
+            item = next(self.lines, "")
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+    stdout = io.StringIO()
+    model = ScriptedModel([ModelReply("continued")])
+
+    code = main(
+        ["--workspace", str(tmp_path)],
+        model=model,
+        stdin=InterruptingInput(),
+        stdout=stdout,
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert model.requests[0].messages[-1]["content"] == "after interrupt"
+    assert "Multiline input cancelled" in stdout.getvalue()
+
+
+def test_one_shot_cli_preserves_newlines_inside_task_argument(tmp_path: Path) -> None:
+    model = ScriptedModel([ModelReply("received")])
+
+    code = main(
+        ["--workspace", str(tmp_path), "line one\nline two"],
+        model=model,
+        stdout=io.StringIO(),
+        stderr=io.StringIO(),
+    )
+
+    assert code == 0
+    assert model.requests[0].messages[-1]["content"] == "line one\nline two"
+
+
 def test_repl_keyboard_interrupt_cancels_run_and_accepts_next_task(tmp_path: Path) -> None:
     stdin = io.StringIO("interrupt me\ncontinue\n/exit\n")
     stdout = io.StringIO()
