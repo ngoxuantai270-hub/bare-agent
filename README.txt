@@ -1,13 +1,20 @@
 仓库：https://github.com/ngoxuantai270-hub/bare-agent
 
-BareAgent 是一个从零实现的命令行编程智能体，不依赖 Agent 框架，也不使用服务端文件或代码执行工具。模型只负责决策；本地 Harness 自行维护对话、调用工具并控制循环。
+简介
+BareAgent 是从零实现的命令行编程智能体，不使用 Agent 框架或服务端文件、代码执行工具。模型负责决策，本地 Harness 负责上下文、工具执行、输出解析、循环终止和错误处理。
 
-环境：Python 3.11+、uv。安装：uv sync --extra dev。运行 ./scripts/configure-env.sh 后静默输入 API Key；MODEL 默认 deepseek-v4-flash，BASE_URL 默认 https://api.deepseek.com。配置保存到已忽略且权限为 600 的本地 .env，程序会自动读取。也可使用同名环境变量覆盖。不得把真实凭据写入仓库、说明或视频。
+运行
+需要 Python 3.11+ 和 uv：
+1. uv sync --extra dev
+2. ./scripts/configure-env.sh
+3. uv run bare-agent --workspace /path/to/project
 
-单任务：uv run bare-agent --workspace ./project "修复失败测试"
-内存 REPL：uv run bare-agent --workspace ./project
-命令：/help、/status、/multi、/reset、/exit。/multi 中按回车换行，以 /send 提交或 /cancel 放弃。退出后历史不会保存。可用 --trace-jsonl 文件名记录不含任务、模型正文、工具参数及输出的事件元数据。
+脚本会隐藏输入 API Key，MODEL 和 BASE_URL 默认为 deepseek-v4-flash 和 https://api.deepseek.com。配置写入权限为 600 且已被 Git 忽略的 .env；也可设置 OPENAI_API_KEY、OPENAI_MODEL、OPENAI_BASE_URL。请将 /path/to/project 替换为目标项目。
 
-内置工具：read_file、write_file、edit_file、glob_files、search_text、run_command。写入或编辑后必须回读对应文件或成功运行测试类验证命令，否则不接受最终回答。路径限制在工作区内；命令使用 argv 且 shell=False，并有超时、输出截断、敏感环境变量过滤、进程清理和危险命令拦截。上述措施不是操作系统级沙箱，运行不可信代码仍建议使用容器。
+省略任务参数即进入内存 REPL，支持 /help、/status、/multi、/reset 和 /exit；多行模式用 /send 提交、/cancel 取消。单次任务：uv run bare-agent --workspace /path/to/project "修复失败测试"。
 
-验证：uv run --extra dev pytest --cov=bare_agent；uv run python scripts/run_evals.py --case all；uv run --extra dev ruff check .；uv run --extra dev mypy src；uv build。
+特色功能
+内置 read_file、write_file、edit_file、glob_files、search_text、run_command 六个本地工具。Context 按完整 turn/round 裁剪，工具输出限长。文件修改后进入待验证状态，无关命令或失败测试不能解除验证。路径限制在 workspace 内；命令使用 argv、shell=False、超时和敏感变量过滤。
+
+测试
+单元与集成测试：uv run pytest --cov=bare_agent。端到端测评：uv run python scripts/run_evals.py --case all。视频的分页契约错误案例位于 bare-agent-demo，操作见该目录 README.md。安全限制不是操作系统级沙箱。
